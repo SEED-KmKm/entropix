@@ -190,8 +190,9 @@ def fit_dirichlet(
 def ent_grad_hess(
   logits: jnp.ndarray, T: jnp.ndarray
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-  p = jax.nn.softmax(logits / T[..., None], axis=-1)
-  log_p = jax.nn.log_softmax(logits / T[..., None], axis=-1)
+  logit=logits[:,-1]
+  p = jax.nn.softmax(logit / T[..., None], axis=-1)
+  log_p = jax.nn.log_softmax(logit / T[..., None], axis=-1)
   mu1 = jnp.sum(p * log_p, axis=-1)
   diff = log_p - mu1[..., None]
   mu2 = jnp.sum(p * diff**2, axis=-1)
@@ -216,6 +217,7 @@ def temp_tune(
     T, iters, converged = carry
     ent, grad, hess = ent_grad_hess(logits, T)
     error = ent - target_ent
+
     new_converged = converged | (jnp.abs(error) < tol)
     denominator = 2 * grad * grad - error * hess
     halley_step = jnp.where(

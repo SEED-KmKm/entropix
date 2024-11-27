@@ -13,6 +13,7 @@ from typing import (
   Sequence,
   Union,
 )
+import time
 
 import tiktoken
 

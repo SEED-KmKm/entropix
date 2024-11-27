@@ -11,13 +11,13 @@ from entropix.weights import XfmrWeights, LayerWeights
 from jax.sharding import PartitionSpec as PS
 from jax.experimental.pallas.ops.gpu.rms_norm import rms_norm as pl_rms_norm
 
-shard = jax.lax.with_sharding_constraint
+# shard = jax.lax.with_sharding_constraint
 
 DEFAULT_MASK_VALUE = -0.7 * float(jnp.finfo(jnp.dtype("float32")).max)
 
 
 def rms_norm(x: jax.Array, w: jax.Array, eps: float = 1e-6) -> jax.Array:
-  x = shard(x, PS())
+  # x = shard(x, PS())
   return w * (x * jax.lax.rsqrt(jax.lax.pow(x, 2).mean(-1, keepdims=True) + eps))
 
 def apply_rotary_emb(xq: jax.Array, xk: jax.Array, freqs_cis: jax.Array, dtype: jnp.dtype = jnp.float32) -> Tuple[jax.Array, jax.Array]:
@@ -51,14 +51,13 @@ def attention(x: jax.Array, layer_weights: LayerWeights, model_params, cur_pos: 
   scores = jax.nn.softmax(padded_logits, axis=-1).astype(x.dtype)
   output = jnp.einsum('...nqk,...knh->...qnh', scores, values)
   output = output.reshape((output.shape[0], output.shape[1], -1))
-  out = shard(jnp.dot(output, layer_weights.wo), PS())
+  out = jnp.dot(output, layer_weights.wo)
   return out, kvcache, pre_scores
 
 def feed_forward(x: jax.Array, layer_weights: LayerWeights) -> jax.Array:
- x = shard(x, PS())
- h1 = jax.nn.silu(shard(jnp.dot(x, layer_weights.w1), PS(None, None, 'mp')))
- h =  h1 * shard(jnp.dot(x, layer_weights.w3), PS(None, None, 'mp'))
- return shard(jnp.dot(h, layer_weights.w2), PS())
+ h1 = jax.nn.silu(jnp.dot(x, layer_weights.w1))
+ h =  h1 * jnp.dot(x, layer_weights.w3)
+ return jnp.dot(h, layer_weights.w2)
 
 def xfmr(xfmr_weights: XfmrWeights, model_params: ModelParams, tokens: jax.Array, cur_pos: int, freqs_cis: jax.Array, kvcache: KVCache, attn_mask: Optional[jax.Array]=None) -> Tuple[jax.Array, KVCache]:
   h = xfmr_weights.tok_embeddings[tokens]
@@ -68,4 +67,5 @@ def xfmr(xfmr_weights: XfmrWeights, model_params: ModelParams, tokens: jax.Array
     h = h + h_attn
     h = h + feed_forward(rms_norm(h, xfmr_weights.layer_weights[i].ffn_norm), xfmr_weights.layer_weights[i])
   logits = jnp.dot(rms_norm(h, xfmr_weights.norm), xfmr_weights.output.T)
+  # breakpoint()
   return logits, kvcache, scores

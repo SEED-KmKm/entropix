@@ -75,6 +75,7 @@ def initialize_state(
     logprobs_on_supp, initial_dir[:, None, :]
   ).mean(axis=-1)
 
+
   topk_token_logprobs = jnp.take_along_axis(logprobs, topk_indices, axis=-1)
   initial_cross_ent_naked = -topk_token_logprobs.mean(axis=(1, 2))
   initial_cross_var_naked = topk_token_logprobs.var(axis=(1, 2))
@@ -101,12 +102,13 @@ def initialize_state(
 def adaptive_dirichlet_step(
   key: jax.random.PRNGKey,
   state: DSState,
-  logits: jnp.ndarray,
+  old_logits: jnp.ndarray,
   config: DSConfig,
   wild: bool = True,
 ) -> Tuple[DSState, jnp.ndarray]:
-  dtype = logits.dtype
-  bsz, vsz = logits.shape
+  dtype = old_logits.dtype
+  bsz = old_logits.shape[0]
+  logits=old_logits[0]
   output_tokens = jnp.zeros(bsz, dtype=jnp.int32)
   EPS = jnp.array(1e-8, dtype=dtype)
   naked_log_probs = normalize_logits(logits, config.noise_floor)
@@ -202,6 +204,7 @@ def adaptive_dirichlet_step(
   new_emwa_logp_on_supp = update_emwa(
     logprobs_on_supp, state.emwa_logp_on_supp, emwa_logp_coeff[..., None]
   )
+  
   new_emwa_dir, _, _ = fit_dirichlet(new_emwa_logp_on_supp)
   """
   update dirichlet and compute threshold
@@ -279,6 +282,7 @@ def adaptive_dirichlet_step(
     emwa_dir_ent=new_emwa_dir_ent,
     emwa_topk_ent_naked=new_emwa_topk_ent_naked,
   )
+  # breakpoint()
   return (
     new_state,
     output_tokens,

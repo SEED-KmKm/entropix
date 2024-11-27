@@ -68,13 +68,16 @@ def create_partition_spec(key):
 
 def load_weights(
   ckpt_dir: Path, model_params, weight_config: Optional[WeightConfig] = None
-) -> Tuple[XfmrWeights, jax.sharding.Mesh]:
+) -> XfmrWeights:
   """Load and shard model weights across devices."""
   weight_config = weight_config or WeightConfig()
   mesh = create_mesh(jax.device_count())
+  # print("jax.device", jax.device_count())
 
   w = {}
   layer_weights = []
+  # print(ckpt_dir)
+  # print("ckpt_dir", list(ckpt_dir.glob("*.npy")))
 
   for file in ckpt_dir.glob("*.npy"):
     name = ".".join(str(file).split("/")[-1].split(".")[:-1])
@@ -114,4 +117,4 @@ def load_weights(
     layer_weights=layer_weights,
   )
 
-  return xfmr_weights, mesh
+  return xfmr_weights

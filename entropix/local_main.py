@@ -6,17 +6,24 @@ from pathlib import Path
 import jax
 import jax.numpy as jnp
 import tyro
+import json
+import time
+import datetime
+
+dt_now = datetime.datetime.now()
 
 from entropix.config import LLAMA_1B_PARAMS
 from entropix.kvcache import KVCache
 from entropix.model import xfmr
 from entropix.sampler import SamplerConfig, sample
-from entropix.prompts import create_prompts_from_csv, prompt6, p4o
+# from entropix.prompts import create_prompts_from_csv, prompt6, p4o
 from entropix.sampler import sample
 from entropix.tokenizer import Tokenizer
 from entropix.weights import load_weights
+from entropix.dslider import initialize_state
+from entropix.dslider_config import DEFAULT_DS_CONFIG
 
-DEFAULT_WEIGHTS_PATH = Path(__file__).parent / '../weights'
+DEFAULT_WEIGHTS_PATH = Path(__file__).parent.parent / 'weights'
 
 def apply_scaling(freqs: jax.Array):
   SCALE_FACTOR = 8
@@ -63,11 +70,14 @@ def build_attn_mask(seqlen: int, start_pos: int) -> jax.Array:
 
 def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1B-Instruct')):
 #def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('70B-Nemotron-Instruct')):
+  st=time.time()
+  print(jax.devices())
+  stats = {'ent':[[0]], 'varent':[[0]], 'token':[], 'prompt': ""}
   model_params = LLAMA_1B_PARAMS
-  xfmr_weights = load_weights(weights_path.absolute(), n_layers=model_params.n_layers)
+  xfmr_weights = load_weights(weights_path.absolute(), model_params)
   tokenizer = Tokenizer('entropix/tokenizer.model')
   xfmr_fn = jax.jit(xfmr, static_argnames=("model_params",))
-  sample_fn = jax.jit(sample, static_argnames=("cfg",))
+  # sample_fn = jax.jit(sample, static_argnames=("cfg",))
 
   # Create the batch of tokens
   def generate(xfmr_weights, model_params, tokens):
@@ -78,22 +88,29 @@ def main(weights_path: Path = DEFAULT_WEIGHTS_PATH.joinpath('1B-Instruct')):
     attn_mask = build_attn_mask(seqlen, cur_pos)
     freqs_cis = precompute_freqs_cis(model_params.head_dim, model_params.max_seq_len, model_params.rope_theta, model_params.use_scaled_rope)
     kvcache = KVCache.new(model_params.n_layers, bsz, model_params.max_seq_len, model_params.n_local_kv_heads, model_params.head_dim)
-    logits, kvcache, _, _ = xfmr_fn(xfmr_weights, model_params, tokens, cur_pos, freqs_cis[:seqlen], kvcache, attn_mask=attn_mask)
+    logits, kvcache, _ = xfmr_fn(xfmr_weights, model_params, tokens, cur_pos, freqs_cis[:seqlen], kvcache, attn_mask=attn_mask)
     next_token = jnp.argmax(logits[:, -1], axis=-1, keepdims=True).astype(jnp.int32)
-    print(tokenizer.decode([next_token.item()]), end='', flush=True)
+    out_token=tokenizer.decode([next_token.item()])
+    print(out_token, end='', flush=True)
+    stats["token"].append(out_token)
     cur_pos = seqlen
     stop = jnp.array([128001, 128008, 128009])
-    sampler_cfg = SamplerConfig()
+    sampler_cfg = DEFAULT_DS_CONFIG
+    state = initialize_state(logits, bsz, sampler_cfg)
     gen_tokens = [next_token]
     while cur_pos < 8192:
+      # breakpoint()
       cur_pos += 1
-      logits, kvcache, scores, stats = xfmr_fn(xfmr_weights, model_params, next_token, cur_pos, freqs_cis[cur_pos:cur_pos+1], kvcache)
-      next_token = sample(logits, scores, cur_pos, cfg=sampler_cfg)
+      logits, kvcache, scores = xfmr_fn(xfmr_weights, model_params, next_token, cur_pos, freqs_cis[cur_pos:cur_pos+1], kvcache)
+      next_token, state, samplerstats = sample(state, logits, cfg=sampler_cfg)
       gen_tokens.append(next_token)
       out_token = tokenizer.decode(next_token.tolist()[0])
-      print(out_token, end='', flush=True)
+      stats["ent"].append(float((samplerstats['ent'][0])))
+      stats["varent"].append(float((samplerstats['varent'][0])))
+      stats["token"].append(out_token)
       if jnp.isin(next_token, stop).any():
         break
+      
 
   prompt = """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
 
@@ -111,6 +128,13 @@ Sort the numbers from highest to lowest: 9.1, 9.8, 9.11, 9.9, 9.12<|eot_id|><|st
   print(prompt)
   tokens = tokenizer.encode(prompt,  bos=False, eos=False, allowed_special='all')
   generate(xfmr_weights, model_params, tokens)
+  filename=dt_now.strftime('%Y-%m-%d_%H:%M:%S.json')
+  stats["prompt"]=prompt
+  with open('../entropix_stats/'+filename, 'w') as f:
+    json.dump(stats, f, indent=2)
+  et=time.time()
+  print(f"processing_time:{(et-st)}")
+
 
 
 import os
